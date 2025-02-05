@@ -37,19 +37,11 @@ def specexec_forward(inputs, model, tokenizer, max_new_tokens, spec_generator=No
     spec_generator.tree = Tree(prefix_tokens=spec_generator.prefix_tokens, draft_engine=spec_generator.draft_engine, tokenizer=spec_generator.tokenizer)
     spec_generator.levels = spec_generator.get_tree_levels()  # in case the child class works with fixed trees
 
-    # warmup:
-    stats0 = spec_generator.grow_tree(prefix_tokens=spec_generator.prefix_tokens, max_budget=max_budget, max_beam_len=max_beam_len)
-    stats1, warmup_tokens = spec_generator.validate_tree()
-    torch.cuda.empty_cache()
-
-    warmup_tokens_tensor = torch.tensor(warmup_tokens).to(device)
-    spec_generator.prefix_tokens = torch.cat((spec_generator.prefix_tokens, warmup_tokens_tensor))
-
     # main generation cycle
     iter = 1
     eos_flag = False
 
-    while len(spec_generator.prefix_tokens) < max_new_tokens + spec_generator.original_num_tokens + len(warmup_tokens) and not eos_flag:
+    while len(spec_generator.prefix_tokens) < max_new_tokens + spec_generator.original_num_tokens and not eos_flag:
         stats0 = spec_generator.grow_tree(prefix_tokens=spec_generator.prefix_tokens, max_budget=max_budget, max_beam_len=max_beam_len)
         stats1, fresh_tokens = spec_generator.validate_tree()
         torch.cuda.empty_cache()
@@ -57,14 +49,15 @@ def specexec_forward(inputs, model, tokenizer, max_new_tokens, spec_generator=No
         if spec_generator.tokenizer.eos_token_id in fresh_tokens:
             fresh_tokens = fresh_tokens[: fresh_tokens.index(spec_generator.tokenizer.eos_token_id)]
             eos_flag = True
-             
-        fresh_tokens_tensor = torch.tensor(fresh_tokens).to(device)
-        spec_generator.prefix_tokens = torch.cat((spec_generator.prefix_tokens, fresh_tokens_tensor))
+
+        if len(fresh_tokens) > 0:
+            fresh_tokens_tensor = torch.tensor(fresh_tokens).to(device)
+            spec_generator.prefix_tokens = torch.cat((spec_generator.prefix_tokens, fresh_tokens_tensor))
 
         iter += 1
         accept_length_list.append(len(fresh_tokens))
     
-    new_token = len(spec_generator.prefix_tokens) - spec_generator.original_num_tokens - len(warmup_tokens)
+    new_token = len(spec_generator.prefix_tokens) - spec_generator.original_num_tokens
     output_ids = spec_generator.prefix_tokens.unsqueeze(0)
 
     return output_ids, new_token, iter, accept_length_list
@@ -149,9 +142,6 @@ if __name__ == "__main__":
         answer_file = f"data/{args.bench_name}/model_answer/{args.model_id}.jsonl"
 
     print(f"Output to {answer_file}")
-
-    #model_name_0 = 'JackFram/llama-68m'
-    #model_name_1 = 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
     
     spec_generator = create_spec_generator(
         model_name_0=args.drafter_path,
